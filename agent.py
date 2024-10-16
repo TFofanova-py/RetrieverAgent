@@ -75,6 +75,7 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
         elif not state["is_first_attempt"]:
             return "call_model"
         else:
+            print(f"Intermediate answer: {state['answer']}, trying to add additional context")
             return "add_context"
 
     async def call_model(state: State) -> State:
