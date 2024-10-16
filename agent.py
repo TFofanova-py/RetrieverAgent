@@ -3,7 +3,6 @@ from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_community.vectorstores import OpenSearchVectorSearch
 from langchain import hub
 from langchain_core.output_parsers import StrOutputParser
-from ollama import AsyncClient
 # from langchain_community.tools.tavily_search import TavilySearchResults
 import json
 from langgraph.checkpoint.memory import MemorySaver
@@ -16,7 +15,6 @@ from langchain_core.documents import Document
 import logging
 from datetime import datetime
 from langchain_core.prompts import MessagesPlaceholder
-from langchain.chains import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate
 
 
@@ -32,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 
 class State(MessagesState):
-    is_first_attempt: bool
     docs: List[Document]
     answer: str
     verbose: bool
@@ -40,7 +37,6 @@ class State(MessagesState):
 
 async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
     def set_initial_state(state: State):
-        state["is_first_attempt"] = True
         state["answer"] = ""
         state["verbose"] = verbose
         state["docs"] = []
@@ -52,46 +48,48 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
         return state
 
     async def generate(state: State) -> State:
-        answer = await rag_chain.ainvoke({"context": state["docs"], "question": state["messages"][-1]})
-        logger.info(f"Generated answer {answer}")
-        response = await llm.ainvoke(f"Rewrite the answer in the same language as question.\nAnswer: {answer}\nQuestion: {state["messages"][-1].content}")
-        state["answer"] = response.content
-        logger.info(f"Rewrited answer {state['answer']}")
+        state["answer"] = await rag_chain.ainvoke({"context": state["docs"], "question": state["messages"][-1]})
+        logger.info(f"Generated answer {state["answer"]}")
         return state
 
-    async def grade_answer(state: State) -> Literal[END, "call_model", "add_context"]:
-        if not state["is_first_attempt"]:
-            return "call_model"
+    async def grade_answer(state: State) -> Literal[END, "call_model"]:
+        # if not state["is_first_attempt"]:
+        #     return "call_model"
 
         grade = await llm.ainvoke(
-            f"Decide if the answer {state["answer"]} is answering to the question {state["messages"][-1]}. Output must be just yes/no")
+            f"Decide if the provided context was used in the answer. Output must be just yes/no\nAnswer: {state["answer"]}")
         grade_content = grade.content.lower().strip()
         logger.info(f"Grading answer, {grade_content}")
 
         if grade_content.startswith("yes"):
-            state["messages"] += state["answer"]
-            print(state["answer"])
+            lang_response = await llm.ainvoke(
+                f"Define language of the text. Return only language name.\nText: {state["messages"][-1].content}")
+            response = await llm.ainvoke(
+                f"Translate the text in {lang_response.content}. Return only translated text without additional details.\nText: {state['answer']}")
+            state["messages"].append(response)
+            print(state["messages"][-1].content)
             return END
-        elif not state["is_first_attempt"]:
-            return "call_model"
         else:
-            print(f"Intermediate answer: {state['answer']}, trying to add additional context")
-            return "add_context"
+            return "call_model"
 
     async def call_model(state: State) -> State:
-        state["messages"] += await llm.ainvoke([state["messages"][-1]])
-        logger.info(state["messages"])
+        msg = ""
+        async for chunk in llm.astream([state["messages"][-1]]):
+            print(chunk.content, end="")
+            msg += chunk.content
+        state["messages"].append(msg)
+        # print(state["messages"][-1].content)
         logger.info(f"Calling model, {state["messages"][-1]}")
         return state
 
-    async def add_context(state: State) -> State:
-        state["is_first_attempt"] = False
-        context = await llm.ainvoke(
-            f"Add context to question {state["messages"][-1]} to improve the answer {state['answer']}. Length of the context should be 3-4 sentences. Return only context without additional details.")
-
-        state["docs"].append(Document(page_content=context.content))
-        logger.info(f"Adding context to question, {context.content}")
-        return state
+    # async def add_context(state: State) -> State:
+    #     state["is_first_attempt"] = False
+    #     context = await llm.ainvoke(
+    #         f"Add context to question {state["messages"][-1]} to improve the answer {state['answer']}. Length of the context should be 3-4 sentences. Return only context without additional details.")
+    #
+    #     state["docs"].append(Document(page_content=context.content))
+    #     logger.info(f"Adding context to question, {context.content}")
+    #     return state
 
     if verbose:
         logger.addHandler(logging.StreamHandler())
@@ -134,13 +132,13 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("generate", generate)
     workflow.add_node("call_model", call_model)
-    workflow.add_node("add_context", add_context)
+    # workflow.add_node("add_context", add_context)
 
     workflow.add_edge(START, "set_initial_state")
     workflow.add_edge("set_initial_state", "retrieve")
     workflow.add_edge("retrieve", "generate")
     workflow.add_conditional_edges("generate", grade_answer)
-    workflow.add_edge("add_context", "generate")
+    # workflow.add_edge("add_context", "generate")
     workflow.add_edge("call_model", END)
 
     memory = MemorySaver()
@@ -149,12 +147,17 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
     return graph, config
 
 
-if __name__ == "__main__":
-    agent, config = asyncio.run(setup_agent(verbose=False))
+async def main():
+    agent, config =  await setup_agent(verbose=False)
     logger.info("Agent started")
 
     while True:
-        input_message = input(">>")  #  "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
+        input_message = input(
+            ">>")  # "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
         start = datetime.now()
-        output = asyncio.run(agent.ainvoke({"messages": [input_message]}, config))
+        output = await agent.ainvoke({"messages": [input_message]}, config)
         logger.info(f"Response time: {datetime.now() - start}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
