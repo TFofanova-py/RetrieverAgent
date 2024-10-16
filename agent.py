@@ -148,12 +148,11 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
 
 
 async def main():
-    agent, config =  await setup_agent(verbose=False)
+    agent, config = await setup_agent(verbose=False)
     logger.info("Agent started")
 
     while True:
-        input_message = input(
-            ">>")  # "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
+        input_message = input("\n>>")  # "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
         start = datetime.now()
         output = await agent.ainvoke({"messages": [input_message]}, config)
         logger.info(f"Response time: {datetime.now() - start}")
