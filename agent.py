@@ -149,7 +149,7 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
 
 
 if __name__ == "__main__":
-    agent, config = asyncio.run(setup_agent(verbose=True))
+    agent, config = asyncio.run(setup_agent(verbose=False))
     logger.info("Agent started")
 
     while True:
