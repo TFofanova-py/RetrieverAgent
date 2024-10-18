@@ -99,7 +99,7 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
         ]
     )
 
-    embedder = OllamaEmbeddings(model=model)
+    embedder = OllamaEmbeddings(model="llama3")
     db_kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
     db_kwargs["http_auth"] = (db_kwargs.get("http_auth", {}).get("login"), db_kwargs.get("http_auth", {}).get("password"))
     db = OpenSearchVectorSearch(
@@ -108,11 +108,10 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     )
 
     llm = ChatOllama(model=model, temperature=0)
-    llama_llm = ChatOllama(model="llama3")
     retriever = db.as_retriever()
 
     history_aware_retriever = create_history_aware_retriever(
-        llama_llm, retriever, contextualize_q_prompt
+        llm, retriever, contextualize_q_prompt
     )
 
     rag_prompt = hub.pull("rlm/rag-prompt")
