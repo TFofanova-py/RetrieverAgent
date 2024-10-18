@@ -108,10 +108,11 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     )
 
     llm = ChatOllama(model=model, temperature=0)
+    llama_llm = ChatOllama(model="llama3")
     retriever = db.as_retriever()
 
     history_aware_retriever = create_history_aware_retriever(
-        llm, retriever, contextualize_q_prompt
+        llama_llm, retriever, contextualize_q_prompt
     )
 
     rag_prompt = hub.pull("rlm/rag-prompt")
