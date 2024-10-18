@@ -16,6 +16,8 @@ import logging
 from datetime import datetime
 from langchain_core.prompts import MessagesPlaceholder
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import SystemMessage, AIMessage
+import argparse
 
 
 # _set_env("TAVILY_API_KEY")
@@ -35,7 +37,12 @@ class State(MessagesState):
     verbose: bool
 
 
-async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
+def add_lang_prompt(inputs):
+    inputs.messages = [SystemMessage("Always return output in German.")] + inputs.messages
+    return inputs
+
+
+async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
     def set_initial_state(state: State):
         state["answer"] = ""
         state["verbose"] = verbose
@@ -53,20 +60,13 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
         return state
 
     async def grade_answer(state: State) -> Literal[END, "call_model"]:
-        # if not state["is_first_attempt"]:
-        #     return "call_model"
-
         grade = await llm.ainvoke(
             f"Decide if the provided context was used in the answer. Output must be just yes/no\nAnswer: {state["answer"]}")
         grade_content = grade.content.lower().strip()
         logger.info(f"Grading answer, {grade_content}")
 
         if grade_content.startswith("yes"):
-            lang_response = await llm.ainvoke(
-                f"Define language of the text. Return only language name.\nText: {state["messages"][-1].content}")
-            response = await llm.ainvoke(
-                f"Translate the text in {lang_response.content}. Return only translated text without additional details.\nText: {state['answer']}")
-            state["messages"].append(response)
+            state["messages"].append(AIMessage(state['answer']))
             print(state["messages"][-1].content)
             return END
         else:
@@ -78,18 +78,8 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
             print(chunk.content, end="")
             msg += chunk.content
         state["messages"].append(msg)
-        # print(state["messages"][-1].content)
         logger.info(f"Calling model, {state["messages"][-1]}")
         return state
-
-    # async def add_context(state: State) -> State:
-    #     state["is_first_attempt"] = False
-    #     context = await llm.ainvoke(
-    #         f"Add context to question {state["messages"][-1]} to improve the answer {state['answer']}. Length of the context should be 3-4 sentences. Return only context without additional details.")
-    #
-    #     state["docs"].append(Document(page_content=context.content))
-    #     logger.info(f"Adding context to question, {context.content}")
-    #     return state
 
     if verbose:
         logger.addHandler(logging.StreamHandler())
@@ -109,7 +99,7 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
         ]
     )
 
-    embedder = OllamaEmbeddings(model="llama3")
+    embedder = OllamaEmbeddings(model=model)
     db_kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
     db_kwargs["http_auth"] = (db_kwargs.get("http_auth", {}).get("login"), db_kwargs.get("http_auth", {}).get("password"))
     db = OpenSearchVectorSearch(
@@ -117,7 +107,7 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
         **db_kwargs
     )
 
-    llm = ChatOllama(model="llama3", temperature=0)
+    llm = ChatOllama(model=model, temperature=0)
     retriever = db.as_retriever()
 
     history_aware_retriever = create_history_aware_retriever(
@@ -125,20 +115,18 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
     )
 
     rag_prompt = hub.pull("rlm/rag-prompt")
-    rag_chain = rag_prompt | llm | StrOutputParser()
+    rag_chain = rag_prompt | add_lang_prompt | llm | StrOutputParser()
 
     workflow = StateGraph(State)
     workflow.add_node("set_initial_state", set_initial_state)
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("generate", generate)
     workflow.add_node("call_model", call_model)
-    # workflow.add_node("add_context", add_context)
 
     workflow.add_edge(START, "set_initial_state")
     workflow.add_edge("set_initial_state", "retrieve")
     workflow.add_edge("retrieve", "generate")
     workflow.add_conditional_edges("generate", grade_answer)
-    # workflow.add_edge("add_context", "generate")
     workflow.add_edge("call_model", END)
 
     memory = MemorySaver()
@@ -147,8 +135,8 @@ async def setup_agent(verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
     return graph, config
 
 
-async def main():
-    agent, config = await setup_agent(verbose=False)
+async def main(model: str):
+    agent, config = await setup_agent(model=model, verbose=False)
     logger.info("Agent started")
 
     while True:
@@ -159,4 +147,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-m", "--model", default="llama3", help="Model to use")
+
+    args = parser.parse_args()
+    asyncio.run(main(model=args.model))
