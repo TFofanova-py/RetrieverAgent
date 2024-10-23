@@ -148,7 +148,6 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     workflow.add_node("save_information", save_information)
 
     workflow.add_conditional_edges(START, has_save_tag)
-    # workflow.add_edge(START, "set_initial_state")
     workflow.add_edge("set_initial_state", "retrieve")
     workflow.add_edge("retrieve", "generate")
     workflow.add_conditional_edges("generate", grade_answer)
