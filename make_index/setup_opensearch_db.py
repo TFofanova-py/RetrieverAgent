@@ -2,7 +2,7 @@ import json
 import logging
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import OpenSearchVectorSearch
-from ollama import AsyncClient
+import ollama
 import pdfplumber
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import re
@@ -12,7 +12,7 @@ import asyncio
 logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         level=logging.INFO,
-        handlers=[logging.FileHandler("indexing.log")]
+        handlers=[logging.FileHandler("./logs/indexing.log")]
     )
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,7 @@ Output must be a list of questions without any additional thoughts and explanati
 
 def get_chunks():
     path = "Docs/240722_nis2-regierungsentwurf.pdf"
+    dt = datetime(year=2024, month=7, day=22)
     text = ""
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -36,12 +37,12 @@ def get_chunks():
         separators=["\n\n", "\n"]
     )
 
-    return path, text_splitter.split_text(text)
+    return path, dt, text_splitter.split_text(text)
 
 
 async def make_questions(chunk, model: str = "llama3"):
 
-    response = await AsyncClient().chat(
+    response = ollama.chat(
         model=model,
         messages=[
             {"role": "system", "content": chunk_prompt},
@@ -54,12 +55,12 @@ async def make_questions(chunk, model: str = "llama3"):
             }
 
 
-async def process_chunk(chunk: str, source: str, model: str = "llama3"):
+async def process_chunk(chunk: str, source: str, dt: datetime, model: str = "llama3"):
     doc = await make_questions(chunk=chunk)
     text = doc.get("text")
-    metadata = {"source": source}
-    chunk_embeddings = OllamaEmbeddings(model="llama3").embed_documents(doc.get("questions", []))
-    return text, chunk_embeddings, metadata
+    metadata = {"source": source, "timestamp": dt}
+    emb_response = ollama.embed(model="llama3", input=doc.get("questions", []))
+    return text, emb_response["embeddings"], metadata
 
 
 async def main(verbose: bool = True):
@@ -73,19 +74,19 @@ async def main(verbose: bool = True):
 
     db = OpenSearchVectorSearch(embedding_function=embedder, **kwargs)
     if db.index_exists(kwargs.get(index_name)):
-        db.delete_index(index_name)
+        confirmation = input("Do you want to DELETE existing index? [Yes/No] >> ")
+        if confirmation.lower().strip().startswith("yes"):
+            db.delete_index(index_name)
 
     start = datetime.now()
-    source, chunks = get_chunks()
+    source, dt, chunks = get_chunks()
     logger.info(f"Splitting {source} for chunks, {datetime.now() - start}, OK")
 
     i_start = 0  # 610 total
-    tasks = []
     for i, chunk in enumerate(chunks[i_start:]):
-        tasks.append(process_chunk(chunk, source))
-    results = await asyncio.gather(*tasks)
+        start = datetime.now()
+        text, embs, metadata = await process_chunk(chunk, source, dt)
 
-    for text, embs, metadata in results:
         embs = [x for x in embs if x]
 
         if not embs:
@@ -106,7 +107,7 @@ async def main(verbose: bool = True):
                 metadatas=[{"source": source}] * len(embs),
                 **kwargs
             )
-        logger.info(f"Indexing {source} for chunk {i + i_start}, OK")
+        logger.info(f"Indexing {source}, chunk {i + i_start} / {len(chunks)}, {datetime.now() - start}, OK")
     logger.info("Success")
 
 

@@ -18,7 +18,6 @@ from langchain_core.prompts import MessagesPlaceholder
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage
 import argparse
-from make_index.setup_opensearch_db import process_chunk
 
 
 # _set_env("TAVILY_API_KEY")
@@ -27,7 +26,7 @@ from make_index.setup_opensearch_db import process_chunk
 logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         level=logging.INFO,
-        handlers=[logging.FileHandler("logs/agent.log")]
+        handlers=[logging.FileHandler("../logs/agent.log")]
     )
 logger = logging.getLogger(__name__)
 
@@ -44,13 +43,7 @@ def add_lang_prompt(inputs):
 
 
 async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateGraph, dict]:
-    async def has_save_tag(state: State) -> Literal["save_information", "set_initial_state"]:
-        if state["messages"][-1].content.strip().lower().startswith("#save"):
-            return "save_information"
-        return "set_initial_state"
-
     def set_initial_state(state: State):
-        logger.info("Set initial state")
         state["answer"] = ""
         state["verbose"] = verbose
         state["docs"] = []
@@ -88,21 +81,6 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
         logger.info(f"Calling model, {state["messages"][-1]}")
         return state
 
-    async def save_information(state: State) -> State:
-        logger.info("Save information")
-        text, embs, metadata = await process_chunk(state["messages"][-1].content.replace("#save", ""),
-                                                   "chat_message",
-                                                   datetime.now())
-        text_emb_data = [(text, emb) for emb in embs if emb]
-        logger.info("Adding embeddings")
-        db.add_embeddings(text_emb_data,
-                          metadatas=[metadata] * len(embs),
-                          index_name=index_name
-                          )
-        state["messages"].append(AIMessage(f"Information is saved in index {index_name}"))
-        print(state["messages"][-1].content)
-        return state
-
     if verbose:
         logger.addHandler(logging.StreamHandler())
 
@@ -122,9 +100,8 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     )
 
     embedder = OllamaEmbeddings(model="llama3")
-    db_kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
+    db_kwargs = json.load(open("../creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
     db_kwargs["http_auth"] = (db_kwargs.get("http_auth", {}).get("login"), db_kwargs.get("http_auth", {}).get("password"))
-    index_name = db_kwargs.get("index_name")
     db = OpenSearchVectorSearch(
         embedding_function=embedder,
         **db_kwargs
@@ -145,15 +122,12 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("generate", generate)
     workflow.add_node("call_model", call_model)
-    workflow.add_node("save_information", save_information)
 
-    workflow.add_conditional_edges(START, has_save_tag)
-    # workflow.add_edge(START, "set_initial_state")
+    workflow.add_edge(START, "set_initial_state")
     workflow.add_edge("set_initial_state", "retrieve")
     workflow.add_edge("retrieve", "generate")
     workflow.add_conditional_edges("generate", grade_answer)
     workflow.add_edge("call_model", END)
-    workflow.add_edge("save_information", END)
 
     memory = MemorySaver()
     graph = workflow.compile(checkpointer=memory)
@@ -167,12 +141,9 @@ async def main(model: str):
 
     while True:
         input_message = input("\n>>")  # "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
-        if input_message:
-            start = datetime.now()
-            logger.info(f"Input message: {input_message}")
-            output = await agent.ainvoke({"messages": [input_message]}, config)
-            logger.info(f"Response time: {datetime.now() - start}")
-
+        start = datetime.now()
+        output = await agent.ainvoke({"messages": [input_message]}, config)
+        logger.info(f"Response time: {datetime.now() - start}")
 
 
 if __name__ == "__main__":
