@@ -19,6 +19,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage
 import argparse
 from make_index.setup_opensearch_db import process_chunk
+import sys
 
 
 # _set_env("TAVILY_API_KEY")
@@ -165,8 +166,13 @@ async def main(model: str):
     logger.info("Agent started")
 
     while True:
-        input_message = input("\n>>")  # "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
-        if input_message:
+        input_lines = []
+        print("\n>>", end="")
+        while (line := input()) != '"""':
+            input_lines.append(line)
+        input_message = "\n".join(input_lines).strip().replace('"""', '')
+
+        if input_message: # "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
             start = datetime.now()
             logger.info(f"Input message: {input_message}")
             output = await agent.ainvoke({"messages": [input_message]}, config)
