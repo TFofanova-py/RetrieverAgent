@@ -68,11 +68,11 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
         return state
 
     async def grade_answer(state: State) -> Literal[END, "call_model"]:
-        grade = await llm.ainvoke(f"Decide if the provided context was used in the answer. Output must be just yes/no\nAnswer: {state["answer"]}")
+        grade = await llm.ainvoke(f"I give you a text of answer. Your task is to decide if the text means \"I don't know\". Output must be just yes or no.\nText: {state["answer"]}")
         grade_content = grade.content.lower().strip()
         logger.info(f"Grading answer, {grade_content}")
 
-        if grade_content.startswith("yes"):
+        if any([grade_content.startswith(x) for x in ["no", "nein"]]):
             state["messages"].append(AIMessage(state['answer']))
             print(state["messages"][-1].content)
             return END
@@ -81,7 +81,8 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
 
     async def call_model(state: State) -> State:
         msg = ""
-        async for chunk in llm_chain.astream({"input": [state["messages"][-1]]}):
+        async for chunk in llm.astream([SystemMessage(content="Always return output in German."),
+                                        state["messages"][-1]]):
             print(chunk.content, end="")
             msg += chunk.content
         state["messages"].append(msg)
@@ -99,7 +100,7 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
                           metadatas=[metadata] * len(embs),
                           index_name=index_name
                           )
-        state["messages"].append(AIMessage(f"Information is saved in index {index_name}"))
+        state["messages"].append(AIMessage(f"Informationen werden im Index {index_name} gespeichert"))
         print(state["messages"][-1].content)
         return state
 
@@ -139,7 +140,6 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
 
     rag_prompt = hub.pull("rlm/rag-prompt")
     rag_chain = rag_prompt | add_lang_prompt | llm | StrOutputParser()
-    llm_chain = add_lang_prompt | llm | StrOutputParser()
 
     workflow = StateGraph(State)
     workflow.add_node("set_initial_state", set_initial_state)
@@ -166,12 +166,12 @@ async def main(model: str):
     logger.info("Agent started")
 
     while True:
-        # input_lines = []
-        # print("\n>>", end="")
-        # while (line := input()) != '"""':
-        #     input_lines.append(line)
-        # input_message = "\n".join(input_lines).strip().replace('"""', '')
-        input_message = input(">> ")
+        input_lines = []
+        print("\n>>", end="")
+        while (line := input()) != '*':
+            input_lines.append(line)
+        input_message = "\n".join(input_lines).strip().replace('"""', '')
+        # input_message = input(">> ")
 
         if input_message: # "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
             start = datetime.now()
