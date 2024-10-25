@@ -168,7 +168,7 @@ async def main(model: str):
     while True:
         input_lines = []
         print("\n>>", end="")
-        while (line := input()) != '*':
+        while (line := input()).strip() != '*':
             input_lines.append(line)
         input_message = "\n".join(input_lines).strip().replace('"""', '')
         # input_message = input(">> ")
