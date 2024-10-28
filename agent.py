@@ -51,7 +51,6 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
 
     def set_initial_state(state: State):
         logger.info("Set initial state")
-        state["answer"] = ""
         state["verbose"] = verbose
         state["docs"] = []
         return state
@@ -77,15 +76,13 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
         logger.info(f"Generated answer {state["answer"]}")
         return state
 
-    async def grade_answer(state: State) -> Literal[END, "call_model"]:
+    async def grade_answer(state: State) -> Literal["save_answer", "call_model"]:
         grade = await llm.ainvoke(f"I give you a text of answer. Your task is to decide if the text means \"I don't know\". Output must be just yes or no.\nText: {state["answer"]}")
         grade_content = grade.content.lower().strip()
         logger.info(f"Grading answer, {grade_content}")
 
         if any([grade_content.startswith(x) for x in ["no", "nein"]]):
-            state["messages"].append(AIMessage(state['answer']))
-            print(state["messages"][-1].content)
-            return END
+            return "save_answer"
         else:
             return "call_model"
 
@@ -111,6 +108,12 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
                           index_name=index_name
                           )
         state["messages"].append(AIMessage(f"Informationen werden im Index {index_name} gespeichert"))
+        print(state["messages"][-1].content)
+        return state
+
+    async def save_answer(state: State) -> State:
+        logger.info("Save answer")
+        state["messages"].append(AIMessage(state["answer"]))
         print(state["messages"][-1].content)
         return state
 
@@ -157,6 +160,7 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     workflow.add_node("generate", generate)
     workflow.add_node("call_model", call_model)
     workflow.add_node("save_information", save_information)
+    workflow.add_node("save_answer", save_answer)
 
     workflow.add_conditional_edges(START, has_save_tag)
     workflow.add_conditional_edges("set_initial_state", cls_query)
@@ -164,6 +168,7 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     workflow.add_conditional_edges("generate", grade_answer)
     workflow.add_edge("call_model", END)
     workflow.add_edge("save_information", END)
+    workflow.add_edge("save_answer", END)
 
     memory = MemorySaver()
     graph = workflow.compile(checkpointer=memory)
@@ -182,12 +187,12 @@ async def main_gr():
 
         return "", chat_history
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", default="llama3", help="Model to use")
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("-m", "--model", default="llama3", help="Model to use")
+    #
+    # args = parser.parse_args()
 
-    args = parser.parse_args()
-
-    agent, config =  await setup_agent(model=args.model, verbose=False)
+    agent, config =  await setup_agent(model="llama3", verbose=False)
     logger.info("Agent started")
 
     with gr.Blocks() as demo:
