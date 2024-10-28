@@ -198,7 +198,7 @@ async def main_gr():
         # Bind the async function to the submit button
         submit.click(chat_response, inputs=[message, chatbot], outputs=[message, chatbot])
 
-    demo.launch()
+    demo.launch(share=True)
 
 if __name__ == "__main__":
     asyncio.run(main_gr())
