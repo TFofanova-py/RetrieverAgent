@@ -19,7 +19,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage
 import argparse
 from make_index.setup_opensearch_db import process_chunk
-import sys
 
 
 # _set_env("TAVILY_API_KEY")
@@ -57,6 +56,17 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
         state["docs"] = []
         return state
 
+    async def cls_query(state: State) -> Literal["call_model", "retrieve"]:
+        is_query_response = await llm.ainvoke(
+            f"I give you a text. Your task is to decide if the text is a query for information. Output must be just yes or no.\nText: {state["messages"][-1].content}")
+        is_query = is_query_response.content.lower().strip()
+        logger.info(f"Classificator: is a query, {is_query}")
+
+        if any([is_query.startswith(x) for x in ["yes", "ja"]]):
+            return "retrieve"
+        else:
+            return "call_model"
+
     async def retrieve(state: State) -> State:
         state["docs"] += await history_aware_retriever.ainvoke({"input": state["messages"][-1].content, "chat_history": state["messages"][-6:]})
         logger.info(f"Retrieved documents: {state["docs"]}")
@@ -85,7 +95,7 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
                                         state["messages"][-1]]):
             print(chunk.content, end="")
             msg += chunk.content
-        state["messages"].append(msg)
+        state["messages"].append(AIMessage(content=msg))
         logger.info(f"Calling model, {state["messages"][-1]}")
         return state
 
@@ -149,7 +159,7 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     workflow.add_node("save_information", save_information)
 
     workflow.add_conditional_edges(START, has_save_tag)
-    workflow.add_edge("set_initial_state", "retrieve")
+    workflow.add_conditional_edges("set_initial_state", cls_query)
     workflow.add_edge("retrieve", "generate")
     workflow.add_conditional_edges("generate", grade_answer)
     workflow.add_edge("call_model", END)
@@ -160,30 +170,35 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     config = {"configurable": {"thread_id": "1"}}
     return graph, config
 
+async def main_gr():
+    import gradio as gr
 
-async def main(model: str):
-    agent, config = await setup_agent(model=model, verbose=False)
-    logger.info("Agent started")
+    async def chat_response(input_message, chat_history):
+        start = datetime.now()
+        logger.info(f"Input message: {input_message}")
+        output = await agent.ainvoke({"messages": [input_message]}, config)
+        chat_history.append((input_message, output["messages"][-1].content))
+        logger.info(f"Response time: {datetime.now() - start}")
 
-    while True:
-        input_lines = []
-        print("\n>>", end="")
-        while (line := input()).strip() != '*':
-            input_lines.append(line)
-        input_message = "\n".join(input_lines).strip().replace('"""', '')
-        # input_message = input(">> ")
+        return "", chat_history
 
-        if input_message: # "Ich arbeite in einem Krankenhaus. Muss ich die Vorschriften aus diesem Gesetz befolgen?"
-            start = datetime.now()
-            logger.info(f"Input message: {input_message}")
-            output = await agent.ainvoke({"messages": [input_message]}, config)
-            logger.info(f"Response time: {datetime.now() - start}")
-
-
-
-if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--model", default="llama3", help="Model to use")
 
     args = parser.parse_args()
-    asyncio.run(main(model=args.model))
+
+    agent, config =  await setup_agent(model=args.model, verbose=False)
+    logger.info("Agent started")
+
+    with gr.Blocks() as demo:
+        chatbot = gr.Chatbot(type="tuples")
+        message = gr.Textbox(placeholder="Type a message...", label="Your Message")
+        submit = gr.Button("Send")
+
+        # Bind the async function to the submit button
+        submit.click(chat_response, inputs=[message, chatbot], outputs=[message, chatbot])
+
+    demo.launch()
+
+if __name__ == "__main__":
+    asyncio.run(main_gr())
