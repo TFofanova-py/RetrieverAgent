@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 from langchain_core.prompts import MessagesPlaceholder
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import SystemMessage, AIMessage
+from langchain_core.messages import SystemMessage, AIMessage, BaseMessage
 import argparse
 from make_index.setup_opensearch_db import process_chunk
 
@@ -72,19 +72,24 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
         return state
 
     async def generate(state: State) -> State:
-        state["answer"] = await rag_chain.ainvoke({"context": state["docs"], "question": state["messages"][-1]})
-        logger.info(f"Generated answer {state["answer"]}")
-        return state
 
-    async def grade_answer(state: State) -> Literal["save_answer", "call_model"]:
-        grade = await llm.ainvoke(f"I give you a text of answer. Your task is to decide if the text means \"I don't know\". Output must be just yes or no.\nText: {state["answer"]}")
+        ret_task = asyncio.create_task(rag_chain.ainvoke({"context": state["docs"], "question": state["messages"][-1]}))
+        llm_task = asyncio.create_task(llm.ainvoke([SystemMessage(content="Always return output in German."),
+                                        state["messages"][-1]]))
+        ret_answer = await ret_task
+
+        grade = await llm.ainvoke(
+            f"I give you a text of answer. Your task is to decide if the text means \"I don't know\". Output must be just yes or no.\nText: {ret_answer}")
         grade_content = grade.content.lower().strip()
         logger.info(f"Grading answer, {grade_content}")
 
         if any([grade_content.startswith(x) for x in ["no", "nein"]]):
-            return "save_answer"
+            llm_task.cancel()
+            state["answer"] = ret_answer
         else:
-            return "call_model"
+            state["answer"] = (await llm_task).content
+        return state
+
 
     async def call_model(state: State) -> State:
         msg = ""
@@ -158,6 +163,7 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     workflow.add_node("set_initial_state", set_initial_state)
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("generate", generate)
+    # workflow.add_node("choose_answer", choose_answer)
     workflow.add_node("call_model", call_model)
     workflow.add_node("save_information", save_information)
     workflow.add_node("save_answer", save_answer)
@@ -165,7 +171,7 @@ async def setup_agent(model: str, verbose: bool = False) -> Tuple[CompiledStateG
     workflow.add_conditional_edges(START, has_save_tag)
     workflow.add_conditional_edges("set_initial_state", cls_query)
     workflow.add_edge("retrieve", "generate")
-    workflow.add_conditional_edges("generate", grade_answer)
+    workflow.add_edge("generate", "save_answer")
     workflow.add_edge("call_model", END)
     workflow.add_edge("save_information", END)
     workflow.add_edge("save_answer", END)
@@ -192,7 +198,7 @@ async def main_gr():
     #
     # args = parser.parse_args()
 
-    agent, config =  await setup_agent(model="llama3", verbose=False)
+    agent, config =  await setup_agent(model="llama3.1", verbose=False)
     logger.info("Agent started")
 
     with gr.Blocks() as demo:
