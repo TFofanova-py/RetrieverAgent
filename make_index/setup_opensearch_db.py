@@ -17,27 +17,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 chunk_prompt = """
-Your task is to generate about 7 questions on which follow text answers.
-Generate in the same language as text.
+Your task is to write 7 questions to the text below, which you can ask the ISMS (information security management system) assistant.
+Language of output is German.
 Output must be a list of questions without any additional thoughts and explanations.
 """
 
 
 def get_chunks():
-    path = "Docs/240722_nis2-regierungsentwurf.pdf"
-    dt = datetime(year=2024, month=7, day=22)
-    text = ""
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() + "\n"
+    paths = [("Docs/240722_nis2-regierungsentwurf.pdf", datetime(year=2024, month=7, day=22)),
+             ("Docs/CELEX_02022L2555-20221227_DE_TXT.pdf", datetime(year=2022, month=12, day=27))
+             ]
+    for path, dt in paths:
+        text = ""
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() + "\n"
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=50,
-        separators=["\n\n", "\n"]
-    )
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=50,
+            separators=["\n\n", "\n"]
+        )
 
-    return path, dt, text_splitter.split_text(text)
+        yield path, dt, text_splitter.split_text(text)
 
 
 async def make_questions(chunk, model: str = "llama3"):
@@ -59,7 +61,7 @@ async def process_chunk(chunk: str, source: str, dt: datetime, model: str = "lla
     doc = await make_questions(chunk=chunk)
     text = doc.get("text")
     metadata = {"source": source, "timestamp": dt}
-    emb_response = ollama.embed(model="llama3", input=doc.get("questions", []))
+    emb_response = ollama.embed(model="llama3.1", input=doc.get("questions", []))
     return text, emb_response["embeddings"], metadata
 
 
@@ -79,35 +81,34 @@ async def main(verbose: bool = True):
             db.delete_index(index_name)
 
     start = datetime.now()
-    source, dt, chunks = get_chunks()
-    logger.info(f"Splitting {source} for chunks, {datetime.now() - start}, OK")
+    for source, dt, chunks in get_chunks():
+        logger.info(f"Splitting {source} for chunks, {datetime.now() - start}, OK")
 
-    i_start = 0  # 610 total
-    for i, chunk in enumerate(chunks[i_start:]):
-        start = datetime.now()
-        text, embs, metadata = await process_chunk(chunk, source, dt)
+        for i, chunk in enumerate(chunks):
+            start = datetime.now()
+            text, embs, metadata = await process_chunk(chunk, source, dt)
 
-        embs = [x for x in embs if x]
+            embs = [x for x in embs if x]
 
-        if not embs:
-            continue
+            if not embs:
+                continue
 
-        if db.index_exists():
-            text_emb_data = [(text, emb) for emb in embs if emb]
-            db.add_embeddings(text_emb_data,
-                              metadatas=[metadata] * len(embs),
-                              index_name=index_name
-                              )
-        else:
-            text_data = [text] * len(embs)
-            db = OpenSearchVectorSearch.from_embeddings(
-                embs,
-                text_data,
-                embedder,
-                metadatas=[{"source": source}] * len(embs),
-                **kwargs
-            )
-        logger.info(f"Indexing {source}, chunk {i + i_start} / {len(chunks)}, {datetime.now() - start}, OK")
+            if db.index_exists():
+                text_emb_data = [(text, emb) for emb in embs if emb]
+                db.add_embeddings(text_emb_data,
+                                  metadatas=[metadata] * len(embs),
+                                  index_name=index_name
+                                  )
+            else:
+                text_data = [text] * len(embs)
+                db = OpenSearchVectorSearch.from_embeddings(
+                    embs,
+                    text_data,
+                    embedder,
+                    metadatas=[{"source": source}] * len(embs),
+                    **kwargs
+                )
+            logger.info(f"Indexing {source}, chunk {i} / {len(chunks)}, {datetime.now() - start}, OK")
     logger.info("Success")
 
 

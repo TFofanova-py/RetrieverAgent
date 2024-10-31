@@ -33,7 +33,7 @@ class Agent:
         self.verbose = verbose
         self.answer: str = ""
         self.messages: List[BaseMessage] = []
-        self.embedder = OllamaEmbeddings(model="llama3")
+        self.embedder = OllamaEmbeddings(model="llama3.1")
         self.llm = ChatOllama(model=model, temperature=0.)
         self.db_kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
         self.db_kwargs["http_auth"] = (
@@ -76,38 +76,38 @@ class Agent:
         return self.messages[-1].content.strip().lower().startswith("#save")
 
     async def create_answer(self):
-        is_query_task = asyncio.create_task(self.llm.ainvoke(f"I give you a text. Your task is to decide if the text is a query for information. Output must be just yes or no.\nText: {self.messages[-1].content}"))
+        # is_query_task = asyncio.create_task(self.llm.ainvoke(f"I give you a text. Your task is to decide if the text is a query for information. Output must be just yes or no.\nText: {self.messages[-1].content}"))
         # ret_task = asyncio.create_task(self.retriever.ainvoke(self.messages[-1].content))
         # ret_task = asyncio.create_task(self.history_aware_retriever.ainvoke({"input": state["messages"][-1].content, "chat_history": state["messages"][-6:]}))
         # llm_task = asyncio.create_task(self.llm.astream([SystemMessage(content="Always return output in German."), self.messages[-1]]))
 
-        is_query = (await is_query_task).content.lower().strip()
+        # is_query = (await is_query_task).content.lower().strip()
 
-        if any([is_query.startswith(x) for x in ["no", "nein"]]):
-            logger.info("Classificator: it's not a query. LLM answers")
-            # ret_task.cancel()
+        # if any([is_query.startswith(x) for x in ["no", "nein"]]):
+        #     logger.info("Classificator: it's not a query. LLM answers")
+        #     # ret_task.cancel()
+        #     async for chunk in self.llm.astream([SystemMessage(content="Always return output in German."), self.messages[-1]]):
+        #         yield chunk
+        # else:
+        #     logger.info("Classificator: it's a query. Retriever answers")
+        self.docs = await self.retriever.ainvoke(self.messages[-1].content)  # ret_task
+        logger.info(f"Retriever documents: {self.docs}")
+
+        ret_answer = await asyncio.create_task(
+            self.rag_chain.ainvoke({"context": self.docs, "question": self.messages[-1]}))
+        logger.info(f"Retrieved: {ret_answer}")
+
+        grade = await self.llm.ainvoke(
+            f"I give you a text of answer. Your task is to decide if the text means \"I don't know\". Output must be just yes or no.\nText: {ret_answer}")
+        grade_content = grade.content.lower().strip()
+        logger.info(f"Grading answer, {grade_content}")
+
+        if any([grade_content.startswith(x) for x in ["no", "nein"]]):
+            # llm_task.cancel()
+            yield ret_answer
+        else:
             async for chunk in self.llm.astream([SystemMessage(content="Always return output in German."), self.messages[-1]]):
                 yield chunk
-        else:
-            logger.info("Classificator: it's a query. Retriever answers")
-            self.docs = await self.retriever.ainvoke(self.messages[-1].content)  # ret_task
-            logger.info(f"Retriever documents: {self.docs}")
-
-            ret_answer = await asyncio.create_task(
-                self.rag_chain.ainvoke({"context": self.docs, "question": self.messages[-1]}))
-            logger.info(f"Retrieved: {ret_answer}")
-
-            grade = await self.llm.ainvoke(
-                f"I give you a text of answer. Your task is to decide if the text means \"I don't know\". Output must be just yes or no.\nText: {ret_answer}")
-            grade_content = grade.content.lower().strip()
-            logger.info(f"Grading answer, {grade_content}")
-
-            if any([grade_content.startswith(x) for x in ["no", "nein"]]):
-                # llm_task.cancel()
-                yield ret_answer
-            else:
-                async for chunk in self.llm.astream([SystemMessage(content="Always return output in German."), self.messages[-1]]):
-                    yield chunk
 
     async def save_answer(self):
         logger.info("Save answer")
