@@ -18,7 +18,7 @@ def read_questions(file_path):
 
 async def main():
     df = pd.DataFrame(columns=["question", "answer"])
-    questions = read_questions("../questions.txt")
+    questions = read_questions("questions.txt")
     agent = Agent(model="gemma2", verbose=False)
 
     for i, q in enumerate(questions):

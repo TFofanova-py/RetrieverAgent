@@ -13,7 +13,7 @@ from typing import List, Tuple, Literal
 logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         level=logging.INFO,
-        handlers=[logging.FileHandler("../logs/indexing.log")]
+        handlers=[logging.FileHandler("logs/indexing.log")]
     )
 logger = logging.getLogger(__name__)
 

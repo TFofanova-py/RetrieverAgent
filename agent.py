@@ -21,7 +21,7 @@ from make_index.setup_opensearch_db import process_chunk
 logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         level=logging.INFO,
-        handlers=[logging.FileHandler("../logs/agent.log")]
+        handlers=[logging.FileHandler("logs/agent.log")]
     )
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class Agent:
         self.messages: List[BaseMessage] = []
         self.embedder = OllamaEmbeddings(model="llama3.1")
         self.llm = ChatOllama(model=model, temperature=.0)  # OllamaLLM(model=model, temperature=0.)
-        self.db_kwargs = json.load(open("../creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
+        self.db_kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
         self.db_kwargs["http_auth"] = (
             self.db_kwargs.get("http_auth", {}).get("login"),
             self.db_kwargs.get("http_auth", {}).get("password")
