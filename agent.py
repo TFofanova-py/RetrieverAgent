@@ -1,7 +1,7 @@
 import asyncio
 
 from httpcore import stream
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_ollama import ChatOllama, OllamaEmbeddings, OllamaLLM
 from langchain_community.vectorstores import OpenSearchVectorSearch
 from langchain import hub
 from langchain_core.output_parsers import StrOutputParser
@@ -21,7 +21,7 @@ from make_index.setup_opensearch_db import process_chunk
 logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         level=logging.INFO,
-        handlers=[logging.FileHandler("logs/agent.log")]
+        handlers=[logging.FileHandler("../logs/agent.log")]
     )
 logger = logging.getLogger(__name__)
 
@@ -34,8 +34,8 @@ class Agent:
         self.answer: str = ""
         self.messages: List[BaseMessage] = []
         self.embedder = OllamaEmbeddings(model="llama3.1")
-        self.llm = ChatOllama(model=model, temperature=0.)
-        self.db_kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
+        self.llm = ChatOllama(model=model, temperature=.0)  # OllamaLLM(model=model, temperature=0.)
+        self.db_kwargs = json.load(open("../creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
         self.db_kwargs["http_auth"] = (
             self.db_kwargs.get("http_auth", {}).get("login"),
             self.db_kwargs.get("http_auth", {}).get("password")
@@ -45,7 +45,7 @@ class Agent:
             **self.db_kwargs
         )
         self.index_name = self.db_kwargs.get("index_name")
-        self.retriever = self.db.as_retriever()
+        self.retriever = self.db.as_retriever()  # search_kwargs={"k": 6}
         contextualize_q_system_prompt = (
             "Given a chat history and the latest user question "
             "which might reference context in the chat history, "
@@ -69,28 +69,15 @@ class Agent:
 
     @staticmethod
     def add_lang_prompt(inputs):
-        inputs.messages = [SystemMessage("Always return output in German.")] + inputs.messages
+        inputs.messages = [SystemMessage("ALWAYS return output in German. Search for relevant information from the documents but avoid describing these documents. Answer as fully as possible.")] + inputs.messages
         return inputs
 
     async def has_save_tag(self) -> bool:
         return self.messages[-1].content.strip().lower().startswith("#save")
 
     async def create_answer(self):
-        # is_query_task = asyncio.create_task(self.llm.ainvoke(f"I give you a text. Your task is to decide if the text is a query for information. Output must be just yes or no.\nText: {self.messages[-1].content}"))
-        # ret_task = asyncio.create_task(self.retriever.ainvoke(self.messages[-1].content))
-        # ret_task = asyncio.create_task(self.history_aware_retriever.ainvoke({"input": state["messages"][-1].content, "chat_history": state["messages"][-6:]}))
-        # llm_task = asyncio.create_task(self.llm.astream([SystemMessage(content="Always return output in German."), self.messages[-1]]))
-
-        # is_query = (await is_query_task).content.lower().strip()
-
-        # if any([is_query.startswith(x) for x in ["no", "nein"]]):
-        #     logger.info("Classificator: it's not a query. LLM answers")
-        #     # ret_task.cancel()
-        #     async for chunk in self.llm.astream([SystemMessage(content="Always return output in German."), self.messages[-1]]):
-        #         yield chunk
-        # else:
-        #     logger.info("Classificator: it's a query. Retriever answers")
-        self.docs = await self.retriever.ainvoke(self.messages[-1].content)  # ret_task
+        logger.info(f"User input: {self.messages[-1].content}")
+        self.docs = await self.retriever.ainvoke(self.messages[-1].content)
         logger.info(f"Retriever documents: {self.docs}")
 
         ret_answer = await asyncio.create_task(
@@ -99,11 +86,10 @@ class Agent:
 
         grade = await self.llm.ainvoke(
             f"I give you a text of answer. Your task is to decide if the text means \"I don't know\". Output must be just yes or no.\nText: {ret_answer}")
-        grade_content = grade.content.lower().strip()
+        grade_content = grade.content.lower().strip()  # grade.content.lower().strip()
         logger.info(f"Grading answer, {grade_content}")
 
         if any([grade_content.startswith(x) for x in ["no", "nein"]]):
-            # llm_task.cancel()
             yield ret_answer
         else:
             async for chunk in self.llm.astream([SystemMessage(content="Always return output in German."), self.messages[-1]]):
