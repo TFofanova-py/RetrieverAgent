@@ -15,7 +15,7 @@ import json
 
 embedder = OllamaEmbeddings(model="llama3")
 
-db_kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
+db_kwargs = json.load(open("../creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
 db_kwargs["http_auth"] = (db_kwargs.get("http_auth", {}).get("login"), db_kwargs.get("http_auth", {}).get("password"))
 db = OpenSearchVectorSearch(
     embedding_function=embedder,

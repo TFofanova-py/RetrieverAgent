@@ -47,7 +47,7 @@ def get_chunks(paths: List[Tuple[str, datetime]], chunk_size:int = 1000, chunk_o
         yield path, dt, text_splitter.split_text(text)[start_chunk:]
 
 
-async def make_questions(chunk, model: str = "llama3", safe:bool = True):
+async def make_questions(chunk, model: str = "llama3"):
 
     response = ollama.chat(
         model=model,
@@ -61,22 +61,27 @@ async def make_questions(chunk, model: str = "llama3", safe:bool = True):
     questions = [x for x in questions if x]
     if not questions:
         print(response_content)
-    if safe and questions:
-        with open("questions.txt", "a") as f_out:
-            f_out.write("\n".join(questions) + "\n")
     return {"text": chunk,
             "questions": questions
             }
 
 
-async def process_chunk(chunk: str, source: str, dt: datetime, model: str = "llama3", mode: Literal["text", "questions"]= "questions"):
-    if mode == "questions":
+async def process_chunk(chunk: str, source: str, dt: datetime, model: str = "llama3.1", mode: Literal["text", "questions", "both"]= "text", out_file: str = None):
+    if mode == "questions":  # to make index based on embedded questions
         doc = await make_questions(chunk=chunk)
         input_list = doc.get("questions", [])
-    else:
+
+    elif mode == "both":  # to generate questions for dataset and embedding text for index
+        assert out_file is not None, "you must provide an output file for questions"
+        doc = await make_questions(chunk=chunk)
+        with open(out_file, "a") as f_out:
+            f_out.write("\n".join(doc.get("questions", [])) + "\n")
+        input_list = [chunk]
+
+    else:  # to make index based on embedded texts
         input_list = [chunk]
     metadata = {"source": source, "timestamp": dt}
-    emb_response = ollama.embed(model="llama3.1", input=input_list)
+    emb_response = ollama.embed(model=model, input=input_list)
     return chunk, emb_response["embeddings"], metadata
 
 
@@ -97,12 +102,13 @@ async def main(verbose: bool = True):
 
     start = datetime.now()
     paths = [
-        ("Docs/240722_nis2-regierungsentwurf.pdf", datetime(year=2024, month=7, day=22)),
-        ("Docs/CELEX_02022L2555-20221227_DE_TXT.pdf", datetime(year=2022, month=12, day=27)),
-        ("Docs/Leitfaden_zur_Basis-Absicherung.pdf", datetime(year=2020, month=11, day=1)),
-        ("Docs/standard_200_1.pdf", datetime(year=2020, month=11, day=1)),
-        ("Docs/standard_200_2.pdf", datetime(year=2020, month=11, day=2)),
-        ("Docs/it-sicherheitsgesetz.pdf", datetime(year=2020, month=11, day=1)),
+        # ("Docs/240722_nis2-regierungsentwurf.pdf", datetime(year=2024, month=7, day=22)),
+        # ("Docs/CELEX_02022L2555-20221227_DE_TXT.pdf", datetime(year=2022, month=12, day=27)),
+        # ("Docs/Leitfaden_zur_Basis-Absicherung.pdf", datetime(year=2020, month=11, day=1)),
+        # ("Docs/standard_200_1.pdf", datetime(year=2020, month=11, day=1)),
+        # ("Docs/standard_200_2.pdf", datetime(year=2020, month=11, day=2)),
+        # ("Docs/it-sicherheitsgesetz.pdf", datetime(year=2020, month=11, day=1)),
+        ("Docs/ISACA Implementierungsleitfaden ISMS 2022.pdf", datetime(2022, 1, 1)),
     ]
 
     for source, dt, chunks in get_chunks(paths=paths, chunk_size=700):

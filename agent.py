@@ -1,6 +1,4 @@
 import asyncio
-
-from httpcore import stream
 from langchain_ollama import ChatOllama, OllamaEmbeddings, OllamaLLM
 from langchain_community.vectorstores import OpenSearchVectorSearch
 from langchain import hub
