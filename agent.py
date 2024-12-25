@@ -13,6 +13,8 @@ from langchain_core.prompts import MessagesPlaceholder
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage, BaseMessage, HumanMessage
 import argparse
+
+from agents.retriever import retriever
 from make_index.setup_opensearch_db import process_chunk
 
 
@@ -73,9 +75,17 @@ class Agent:
     async def has_save_tag(self) -> bool:
         return self.messages[-1].content.strip().lower().startswith("#save")
 
-    async def create_answer(self):
+    async def create_answer(self, topic: str = ""):
         logger.info(f"User input: {self.messages[-1].content}")
-        self.docs = await self.retriever.ainvoke(self.messages[-1].content)
+        if topic:
+            self.docs = self.db.similarity_search_with_score(
+                query=self.messages[-1].content,
+                space_type='cosineSimilarity',
+                efficient_filter={'bool': {'must': [{'term': {'metadata.type': 'answer'}}, {'regexp': {'metadata.topic': f'.*{topic[-5:]}'}}]}},  #  {'term': {'metadata.topic': topic}} - don't work
+                k=4,
+            )
+        else:
+            self.docs = await self.retriever.ainvoke(self.messages[-1].content)
         logger.info(f"Retriever documents: {self.docs}")
 
         ret_answer = await asyncio.create_task(

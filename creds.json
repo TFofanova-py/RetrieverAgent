@@ -1,0 +1,17 @@
+{
+    "TAVILY_API_KEY": "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",
+    "OPEN_SEARCH_KWARGS": {
+        "index_name": "isms_audit",
+        "opensearch_url": "https://localhost:9200",
+        "http_auth": {
+            "login": "admin",
+            "password": "piskarev_RAG_24"
+        },
+        "engine": "faiss",
+        "use_ssl": false,
+        "verify_certs": false,
+        "ssl_assert_hostname": false,
+        "ssl_show_warn": false,
+        "bulk_size": 700
+    }
+}

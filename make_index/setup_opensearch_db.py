@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 import asyncio
 from typing import List, Tuple, Literal
+import csv
 
 logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -17,24 +18,45 @@ logging.basicConfig(
     )
 logger = logging.getLogger(__name__)
 
-chunk_prompt = """
-Your task is to write 7 questions to the text below, which you can ask the ISMS (information security management system) assistant. Ask questions from the perspective of a company that needs to apply this law in its daily operations.
+chunk_auditor_prompt = """
+Your task is to write up to 2 questions to the text below which an ISMS (information security management system) auditor can asks and DO REQUIRE a respondent to get you a practical example. These questions shouldn't concern budget or money.
 Language of output is German.
-Output must be a list of questions without any additional thoughts and explanations.
-Examples:
-1. Was bedeutet NIS2 für mein Unternehmen?
-2. Welche Produkte und Services muss ich einsetzen, um NIS2 gerecht zu werden?
-3. Welche Prozesse müssen gemäß NIS2 in meinem Unternehmen vorhanden sein?
-4. Welche Auswirkungen hat NIS2 auf mich, als einen Mitarbeiter der IT Abteilung?
-5. Welche Auswirkungen hat NIS2 auf das Unternehmen, in dem ich beschäftigt bin?
+Output must be a list without any additional thoughts and explanations.
+Example:
+1. Wie werden allgemeine Informationssicherheitsziele formuliert und welchen Einfluss haben diese auf den Sicherheitsprozess?
+Nenne mir mehrere Beispiele, wie man Informationssicherheitsziele formulieren kann. Nenne mir mehrere Bespiele, welchen Einfluss diese Ziele auf den Sicherheitsprozess haben können.
+2. Welche Rahmenbedingungen werden für den Sicherheitsprozess ermittelt und wie wird dieser Prozess gestaltet, wenn es beispielsweise eine Veränderung in der Organisation gibt? Nenne mir ein praktisches Beispiel.
 """
 
+define_topic_prompt = """
+Your task is to classify text for one of topics: {topics}. 
+Return only one topic name without any thoughts and explanations.
+"""
 
-def get_chunks(paths: List[Tuple[str, datetime]], chunk_size:int = 1000, chunk_overlap:int = 50):
-    for i, (path, dt) in enumerate(paths):
+TOPICS = [
+    "Context of the Organization",
+    "Leadership and Commitment",
+    "IS Objectives",
+    "IS Policy",
+    "Roles, Responsibilities and Competencies",
+    "Risk Management",
+    "Performance/Risk/Compliance Monitoring",
+    "Documentation",
+    "Communication",
+    "Awareness",
+    "Supplier Relationships",
+    "Internal Audit",
+    "Incident Management",
+    "Continual Improvement"
+]
+
+
+
+def get_chunks(paths: List[Tuple[str, datetime, int]], chunk_size:int = 1000, chunk_overlap:int = 50):
+    for i, (path, dt, start_page) in enumerate(paths):
         text = ""
         with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
+            for page in pdf.pages[max(start_page - 1, 0):]:
                 text += page.extract_text() + "\n"
 
         text_splitter = RecursiveCharacterTextSplitter(
@@ -42,53 +64,74 @@ def get_chunks(paths: List[Tuple[str, datetime]], chunk_size:int = 1000, chunk_o
             chunk_overlap=chunk_overlap,
             separators=["\n\n", "\n"]
         )
-        start_chunk = 0 if i == 0 else 0
 
-        yield path, dt, text_splitter.split_text(text)[start_chunk:]
+        yield path, dt, text_splitter.split_text(text)
+
+async def define_topic(text: str, prompt: str = define_topic_prompt, model: str = "llama3") -> str:
+    response = ollama.chat(
+        model=model,
+        messages=[
+            {"role": "system", "content": prompt.replace("{topics}", str(TOPICS))},
+            {"role": "user", "content": text}]
+    )
+    return response["message"]["content"]
 
 
-async def make_questions(chunk, model: str = "llama3"):
+async def make_questions(chunk, model: str = "llama3", prompt: str = chunk_auditor_prompt):
 
     response = ollama.chat(
         model=model,
         messages=[
-            {"role": "system", "content": chunk_prompt},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": chunk}]
     )
     response_content = response["message"]["content"]
     questions = [re.sub(r"[\d]+\.", "", x).strip()
                           for x in re.findall(r"[\d]+\..+", response_content)]
     questions = [x for x in questions if x]
+    topic = await define_topic(chunk)
     if not questions:
         print(response_content)
     return {"text": chunk,
-            "questions": questions
+            "questions": questions,
+            "topic": re.sub(r"^[\'\"](.+)[\'\"]$", "\\1", topic)
             }
 
 
 async def process_chunk(chunk: str, source: str, dt: datetime, model: str = "llama3.1", mode: Literal["text", "questions", "both"]= "text", out_file: str = None):
     if mode == "questions":  # to make index based on embedded questions
-        doc = await make_questions(chunk=chunk)
-        input_list = doc.get("questions", [])
+        doc = await make_questions(chunk=chunk, prompt=chunk_auditor_prompt)
+        # input_list = doc.get("questions", [])
+        with open(out_file, "a") as out:
+            out.write("\n".join(doc.get("questions")))
+        return None
 
-    elif mode == "both":  # to generate questions for dataset and embedding text for index
+    elif mode == "both":  # to generate questions for dataset and embedding text and questions for index
         assert out_file is not None, "you must provide an output file for questions"
         doc = await make_questions(chunk=chunk)
-        with open(out_file, "a") as f_out:
-            f_out.write("\n".join(doc.get("questions", [])) + "\n")
+        with open(out_file, "a", newline="") as f_out:
+            csv_writer = csv.writer(f_out, quoting=csv.QUOTE_ALL)
+            rows = [[doc.get("topic"), x] for x in doc.get("questions", [])]
+            csv_writer.writerows(rows)
+        texts = doc.get("questions")
+        metadata = [{"source": source, "topic": doc.get("topic"), "timestamp": dt, "type": "question"}] * len(texts)
+        emb_response = ollama.embed(model=model, input=texts)
         input_list = [chunk]
-
+        texts.append(chunk)
+        metadata.append({"source": source, "topic": doc.get("topic"), "timestamp": dt, "type": "answer"})
+        emb_response["embeddings"].extend(ollama.embed(model=model, input=input_list).get("embeddings"))
+        return texts, emb_response["embeddings"], metadata
     else:  # to make index based on embedded texts
         input_list = [chunk]
-    metadata = {"source": source, "timestamp": dt}
-    emb_response = ollama.embed(model=model, input=input_list)
-    return chunk, emb_response["embeddings"], metadata
+        metadata = {"source": source, "timestamp": dt}
+        emb_response = ollama.embed(model=model, input=input_list)
+        return [chunk], emb_response["embeddings"], metadata
 
 
 async def main(verbose: bool = True):
     if verbose:
         logger.addHandler(logging.StreamHandler())
-    embedder = OllamaEmbeddings(model="llama3")
+    embedder = OllamaEmbeddings(model="llama3.1")
 
     kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
     kwargs["http_auth"] = (kwargs.get("http_auth", {}).get("login"), kwargs.get("http_auth", {}).get("password"))
@@ -106,19 +149,20 @@ async def main(verbose: bool = True):
         # ("Docs/CELEX_02022L2555-20221227_DE_TXT.pdf", datetime(year=2022, month=12, day=27)),
         # ("Docs/Leitfaden_zur_Basis-Absicherung.pdf", datetime(year=2020, month=11, day=1)),
         # ("Docs/standard_200_1.pdf", datetime(year=2020, month=11, day=1)),
-        # ("Docs/standard_200_2.pdf", datetime(year=2020, month=11, day=2)),
-        # ("Docs/it-sicherheitsgesetz.pdf", datetime(year=2020, month=11, day=1)),
-        ("Docs/ISACA Implementierungsleitfaden ISMS 2022.pdf", datetime(2022, 1, 1)),
+        ("Docs/standard_200_2.pdf", datetime(year=2020, month=11, day=2), 7),
+        ("Docs/it-sicherheitsgesetz.pdf", datetime(year=2020, month=11, day=1), 1),
+        ("Docs/ISACA Implementierungsleitfaden ISMS 2022.pdf", datetime(2022, 1, 1), 9),
     ]
 
-    for source, dt, chunks in get_chunks(paths=paths, chunk_size=700):
+    for source, dt, chunks in get_chunks(paths=paths, chunk_size=1500):
         logger.info(f"Splitting {source} for chunks, {datetime.now() - start}, OK")
 
         for i, chunk in enumerate(chunks):
+
             start = datetime.now()
-            response = await process_chunk(chunk, source, dt, mode="text")
+            response = await process_chunk(chunk, source, dt, mode="both", out_file="audit_questions.txt")
             if response:
-                text, embs, metadata = response
+                texts, embs, metadatas = response
 
                 embs = [x for x in embs if x]
 
@@ -126,18 +170,17 @@ async def main(verbose: bool = True):
                     continue
 
                 if db.index_exists():
-                    text_emb_data = [(text, emb) for emb in embs if emb]
+                    text_emb_data = [(text, emb) for text, emb in zip(texts, embs) if emb]
                     db.add_embeddings(text_emb_data,
-                                      metadatas=[metadata] * len(embs),
+                                      metadatas=metadatas,
                                       index_name=index_name
                                       )
                 else:
-                    text_data = [text] * len(embs)
                     db = OpenSearchVectorSearch.from_embeddings(
                         embs,
-                        text_data,
+                        texts,
                         embedder,
-                        metadatas=[{"source": source}] * len(embs),
+                        metadatas=metadatas,
                         **kwargs
                     )
                 logger.info(f"Indexing {source}, chunk {i} / {len(chunks)}, {datetime.now() - start}, OK")
@@ -150,3 +193,4 @@ if __name__ == '__main__':
 
 # docker run -it -p 9200:9200 -p 9600:9600 -e OPENSEARCH_INITIAL_ADMIN_PASSWORD=piskarev_RAG_24 -e "discovery.type=single-node" --name opensearch-node -d opensearchproject/opensearch:latest
 # ollama run llama3
+
