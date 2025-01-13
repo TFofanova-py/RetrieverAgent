@@ -1,0 +1,21 @@
+Server
+https://danswer.tzugh.com/
+accounts@tzugh.com
+a1s2d3f4
+
+
+Коннект ollama к danswer
+https://docs.danswer.dev/gen_ai_configs/ollama
+
+Запуск лламы в контейнере
+
+docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
+docker exec -it ollama ollama run llama3
+или
+Docker start ollama
+Docker exec -it ollama ollama run llama3
+
+Остановить контейнер и запустить новый
+sudo systemctl stop ollama
+sudo lsof -i:11434
+sudo docker start ollama

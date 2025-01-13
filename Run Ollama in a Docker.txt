@@ -1,0 +1,48 @@
+1. Run Ollama in a Docker Container with a Volume
+By running the command:
+
+bash
+Copy code
+docker run -d --gpus=all -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
+--gpus=all: Ensures that GPU resources are available to the container (if you have a compatible setup).
+-v ollama:/root/.ollama: Mounts a Docker volume named ollama to the container path /root/.ollama. This is where Ollama will store its configuration, models, and other related files.
+-p 11434:11434: Maps port 11434 on the container to port 11434 on the host, allowing access to Ollama's API/server.
+--name ollama: Names the container ollama.
+ollama/ollama: Uses the official Ollama Docker image.
+The volume ensures that any data in /root/.ollama persists across container restarts.
+
+2. Copy or Create Files in /root/.ollama
+You can place your Modelfile and gguf model files into the /root/.ollama directory in the container. This can be done as follows:
+
+Copy Files into the Volume:
+bash
+Copy code
+docker cp ./Modelfile ollama:/root/.ollama/Modelfile
+docker cp ./unsloth.Q8_0.gguf ollama:/root/.ollama/unsloth.Q8_0.gguf
+3. Create the Model Using ollama create
+Run the ollama create command inside the container:
+
+bash
+Copy code
+docker exec -it ollama ollama create isms -f /root/.ollama/Modelfile
+ollama create my_model: Tells Ollama to create a model named my_model.
+-f /root/.ollama/Modelfile: Specifies the Modelfile path.
+4. Verify the Model
+Once the model is created, verify it by checking the models directory:
+
+bash
+Copy code
+docker exec -it ollama ls /root/.ollama/models
+You should see a directory or file related to my_model.
+
+5. Query the Model
+You can test your newly created model:
+
+bash
+Copy code
+curl http://localhost:11434/query -d '{"model": "my_model", "input": "Hello, world!"}'
+Key Points to Remember
+Volume Persistence: The ollama volume stores all your models and configurations. Even if the container is removed, the data will remain in the volume and can be reused in a new container.
+Modelfile Location: Ensure that the Modelfile path specified in the ollama create command matches its location in the container.
+Container Management: If you need to modify the Modelfile or model files, you can directly interact with the /root/.ollama directory using docker cp or docker exec.
+

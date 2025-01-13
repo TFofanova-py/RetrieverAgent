@@ -18,6 +18,18 @@ logging.basicConfig(
     )
 logger = logging.getLogger(__name__)
 
+chunk_prompt = """
+Your task is to write up to 5 questions to the text below, which you can ask the ISMS (information security management system) assistant. Ask questions from the perspective of a company that needs to apply this law in its daily operations.
+Language of output is German.
+Output must be a list of questions without any additional thoughts and explanations.
+Examples:
+1. Was bedeutet NIS2 für mein Unternehmen?
+2. Welche Produkte und Services muss ich einsetzen, um NIS2 gerecht zu werden?
+3. Welche Prozesse müssen gemäß NIS2 in meinem Unternehmen vorhanden sein?
+4. Welche Auswirkungen hat NIS2 auf mich, als einen Mitarbeiter der IT Abteilung?
+5. Welche Auswirkungen hat NIS2 auf das Unternehmen, in dem ich beschäftigt bin?
+"""
+
 chunk_auditor_prompt = """
 Your task is to write up to 2 questions to the text below which an ISMS (information security management system) auditor can asks and DO REQUIRE a respondent to get you a practical example. These questions shouldn't concern budget or money.
 Language of output is German.
@@ -28,28 +40,25 @@ Nenne mir mehrere Beispiele, wie man Informationssicherheitsziele formulieren ka
 2. Welche Rahmenbedingungen werden für den Sicherheitsprozess ermittelt und wie wird dieser Prozess gestaltet, wenn es beispielsweise eine Veränderung in der Organisation gibt? Nenne mir ein praktisches Beispiel.
 """
 
+chunk_auditor_prompt_1 = """
+Your task is to write one question to the text below which an ISMS (information security management system) auditor can asks. You MUST provide a respondent with a practical conditions. This question shouldn't concern budget or money.
+Make sure that you don't miss practical conditions part. If miss, regenerate output.
+Language of output is German.
+Output must be a list without any additional thoughts and explanations. 
+Example:
+Wie werden alle relevanten Liegenschaften und Kommunikationsverbindungen bei der Modellierung nach IT-Grundschutz berücksichtigt, insbesondere solche, die außerhalb offizieller Liegenschaften liegen?
+Beantworte diese Frage unter Berücksichtigung von dem folgenden praktischen Beispiel:
+- Es wird definiert, welche Zugriffe von extern auf das Unternehmensnetzwerk stattfinden
+- Es wird definiert, wer von außen auf das Unternehmensnetzwerk zugreift.
+- Es wird definiert, wie mit solchen Zugriff umzugehen ist
+"""
+
 define_topic_prompt = """
 Your task is to classify text for one of topics: {topics}. 
 Return only one topic name without any thoughts and explanations.
 """
 
-TOPICS = [
-    "Context of the Organization",
-    "Leadership and Commitment",
-    "IS Objectives",
-    "IS Policy",
-    "Roles, Responsibilities and Competencies",
-    "Risk Management",
-    "Performance/Risk/Compliance Monitoring",
-    "Documentation",
-    "Communication",
-    "Awareness",
-    "Supplier Relationships",
-    "Internal Audit",
-    "Incident Management",
-    "Continual Improvement"
-]
-
+TOPICS = json.load(open("creds.json", "rb"))["TOPICS"]
 
 
 def get_chunks(paths: List[Tuple[str, datetime, int]], chunk_size:int = 1000, chunk_overlap:int = 50):
@@ -89,7 +98,8 @@ async def make_questions(chunk, model: str = "llama3", prompt: str = chunk_audit
     questions = [re.sub(r"[\d]+\.", "", x).strip()
                           for x in re.findall(r"[\d]+\..+", response_content)]
     questions = [x for x in questions if x]
-    topic = await define_topic(chunk)
+    # questions = [response_content,]
+    topic = await define_topic(chunk, model=model)
     if not questions:
         print(response_content)
     return {"text": chunk,
@@ -100,15 +110,17 @@ async def make_questions(chunk, model: str = "llama3", prompt: str = chunk_audit
 
 async def process_chunk(chunk: str, source: str, dt: datetime, model: str = "llama3.1", mode: Literal["text", "questions", "both"]= "text", out_file: str = None):
     if mode == "questions":  # to make index based on embedded questions
-        doc = await make_questions(chunk=chunk, prompt=chunk_auditor_prompt)
+        doc = await make_questions(chunk=chunk, prompt=chunk_prompt, model=model)
         # input_list = doc.get("questions", [])
-        with open(out_file, "a") as out:
-            out.write("\n".join(doc.get("questions")))
+        with open(out_file, "a", newline="") as f_out:
+            csv_writer = csv.writer(f_out, quoting=csv.QUOTE_ALL)
+            rows = [[doc.get("topic"), x] for x in doc.get("questions", [])]
+            csv_writer.writerows(rows)
         return None
 
     elif mode == "both":  # to generate questions for dataset and embedding text and questions for index
         assert out_file is not None, "you must provide an output file for questions"
-        doc = await make_questions(chunk=chunk)
+        doc = await make_questions(chunk=chunk, prompt=chunk_auditor_prompt_1)
         with open(out_file, "a", newline="") as f_out:
             csv_writer = csv.writer(f_out, quoting=csv.QUOTE_ALL)
             rows = [[doc.get("topic"), x] for x in doc.get("questions", [])]
@@ -131,6 +143,8 @@ async def process_chunk(chunk: str, source: str, dt: datetime, model: str = "lla
 async def main(verbose: bool = True):
     if verbose:
         logger.addHandler(logging.StreamHandler())
+
+    chunk_sizes = [500, 1500, 2500]
     embedder = OllamaEmbeddings(model="llama3.1")
 
     kwargs = json.load(open("creds.json", "rb"))["OPEN_SEARCH_KWARGS"]
@@ -154,36 +168,37 @@ async def main(verbose: bool = True):
         ("Docs/ISACA Implementierungsleitfaden ISMS 2022.pdf", datetime(2022, 1, 1), 9),
     ]
 
-    for source, dt, chunks in get_chunks(paths=paths, chunk_size=1500):
-        logger.info(f"Splitting {source} for chunks, {datetime.now() - start}, OK")
+    for chunk_size in chunk_sizes:
+        for source, dt, chunks in get_chunks(paths=paths, chunk_size=chunk_size):
+            logger.info(f"Splitting {source} for chunks, {datetime.now() - start}, OK")
 
-        for i, chunk in enumerate(chunks):
+            for i, chunk in enumerate(chunks):
 
-            start = datetime.now()
-            response = await process_chunk(chunk, source, dt, mode="both", out_file="audit_questions.txt")
-            if response:
-                texts, embs, metadatas = response
+                start = datetime.now()
+                response = await process_chunk(chunk, source, dt, mode="questions", out_file="ds_questions.txt", model="gemma2")
+                if response:
+                    texts, embs, metadatas = response
 
-                embs = [x for x in embs if x]
+                    embs = [x for x in embs if x]
 
-                if not embs:
-                    continue
+                    if not embs:
+                        continue
 
-                if db.index_exists():
-                    text_emb_data = [(text, emb) for text, emb in zip(texts, embs) if emb]
-                    db.add_embeddings(text_emb_data,
-                                      metadatas=metadatas,
-                                      index_name=index_name
-                                      )
-                else:
-                    db = OpenSearchVectorSearch.from_embeddings(
-                        embs,
-                        texts,
-                        embedder,
-                        metadatas=metadatas,
-                        **kwargs
-                    )
-                logger.info(f"Indexing {source}, chunk {i} / {len(chunks)}, {datetime.now() - start}, OK")
+                    if db.index_exists():
+                        text_emb_data = [(text, emb) for text, emb in zip(texts, embs) if emb]
+                        db.add_embeddings(text_emb_data,
+                                          metadatas=metadatas,
+                                          index_name=index_name
+                                          )
+                    else:
+                        db = OpenSearchVectorSearch.from_embeddings(
+                            embs,
+                            texts,
+                            embedder,
+                            metadatas=metadatas,
+                            **kwargs
+                        )
+                    logger.info(f"Indexing {source}, chunk {i} / {len(chunks)}, {datetime.now() - start}, OK")
     logger.info("Success")
 
 

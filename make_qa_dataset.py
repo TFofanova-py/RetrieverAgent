@@ -1,8 +1,6 @@
 import pandas as pd
-from sqlalchemy.dialects.mssql.information_schema import columns
-
 from agent import Agent
-from langchain_core.messages import SystemMessage, AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 import asyncio
 import logging
 
@@ -25,11 +23,12 @@ async def main():
                           HumanMessage(row["question"]),]
         print("Answer: ", end="")
         answer = ""
+
         async for chunk in agent.create_answer(topic=row["topic"]):
             answer += chunk if isinstance(chunk, str) else chunk.content
         print(answer.strip())
         print("\n____________________________________________________________________________________")
-        df = pd.concat([df, pd.DataFrame.from_dict({"question": [row["question"]], "answer": [answer]})], )
+        df = pd.concat([df, pd.DataFrame.from_dict({"topic": [row["topic"]], "question": [row["question"]], "answer": [answer]})], )
         if i % 5 == 0:
             df.to_csv("../qa_dataset.csv", index=False)
 
