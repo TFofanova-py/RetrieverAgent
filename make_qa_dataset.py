@@ -19,12 +19,14 @@ async def main():
 
     for i, row in df_questions.iterrows():
         print(f"Question ({i}) - Topic ({row['topic']}):", row["question"])
-        agent.messages = [SystemMessage("Answer as fully and concrete as you can. You don't ask any questions! Output MUST BE in German."),
-                          HumanMessage(row["question"]),]
+        agent.messages = [
+            # SystemMessage("Answer as fully and concrete as you can. You don't ask any questions! Output MUST BE in German."),
+            HumanMessage(row["question"]),
+        ]
         print("Answer: ", end="")
         answer = ""
 
-        async for chunk in agent.create_answer(topic=row["topic"]):
+        async for chunk in agent.create_answer_llm_first(question=row["question"], topic=row["topic"]):
             answer += chunk if isinstance(chunk, str) else chunk.content
         print(answer.strip())
         print("\n____________________________________________________________________________________")

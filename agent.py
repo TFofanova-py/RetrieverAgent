@@ -1,6 +1,5 @@
 import asyncio
 from asyncio import sleep
-
 import pandas as pd
 from gradio.components.chatbot import ChatMessage
 from langchain_ollama import ChatOllama, OllamaEmbeddings, OllamaLLM
@@ -111,6 +110,30 @@ class Agent:
             async for chunk in self.llm.astream([SystemMessage(content="Always return output in German."), self.messages[-1]]):
                 yield chunk
 
+    async def create_answer_llm_first(self, topic: str = "", question: str = ""):
+        logger.info(f"User input: {question}")
+        llm_answer = await self.llm.ainvoke([SystemMessage(content="Always return output in German."), HumanMessage(content=question)])
+        if topic:
+            self.docs = self.db.similarity_search_with_score(
+                query=question,
+                space_type='cosineSimilarity',
+                efficient_filter={'bool': {'must': [{'term': {'metadata.type': 'answer'}},
+                                                    {'regexp': {'metadata.topic': f'.*{topic[-5:]}'}}]}},
+                k=3,
+            )
+        else:
+            self.docs = await self.retriever.ainvoke(question)
+        prompt = f"""
+        You'll provide a llm answer for a user query and list of documents.
+        Your task is to improve the llm answer using texts of documents if they are relevant.
+        Answer format and language must leave the same.
+        Query: {question}
+        Llm answer: {llm_answer.content}
+        Documents: {'\n'.join([x[0].page_content for x in self.docs])}
+        """
+        async for chunk in self.llm.astream(prompt):
+            yield chunk
+
     async def save_answer(self):
         logger.info("Save answer")
         self.messages.append(AIMessage(self.answer))
@@ -163,7 +186,7 @@ async def main_gr():
         agent.messages.append(HumanMessage(input_message))
         msg = "**Musterantwort**: "
 
-        async for chunk in agent.create_answer(question=agent.messages[-2].content,):
+        async for chunk in agent.create_answer_llm_first(question=agent.messages[-2].content, topic=topic):
             msg += chunk + " " if isinstance(chunk, str) else chunk.content
             yield msg
         agent.messages.append(AIMessage(msg))
@@ -207,7 +230,8 @@ async def main_gr():
         user_state = gr.State(value={"curr_question": 0})
         question = await ask_question(user_state.value, topic_list.value)
         messages = [AIMessage(f"Hallo! Ich bin ein KI-Assistent für Informationssicherheitsaudits. Sie haben Abschnitt {topic_list.value} ausgewählt"),
-                    AIMessage(f"**1 Frage**: {question}")]
+                    AIMessage(f"**1 Frage**: {question}")
+                    ]
         agent.messages = messages
         chatbot = gr.ChatInterface(fn=chat_response,
                                    type="messages",
