@@ -4,7 +4,7 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import torch
 
 # Define the model name (replace with your desired model)
-MODEL_NAME = "facebook/nllb-200-3.3B"
+MODEL_NAME = "facebook/nllb-200-distilled-600M"
 
 # Load model and tokenizer
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -18,13 +18,14 @@ app = FastAPI()
 
 class RequestModel(BaseModel):
     text: str
+    lang: str = "deu_Latn"
 
 
 @app.post("/translate")
 async def translate(req: RequestModel):
     try:
         input_ids = tokenizer(req.text, return_tensors="pt").input_ids.to(device)
-        output_ids = model.generate(input_ids, max_length=700)
+        output_ids = model.generate(input_ids, forced_bos_token_id=tokenizer.convert_tokens_to_ids(req.lang), max_length=700)
         output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         return {"translated_text": output_text}
     except Exception as e:
@@ -34,5 +35,3 @@ async def translate(req: RequestModel):
 def root():
     return {"message": "Hugging Face Translation API is running"}
 
-# docker built -t nllb_service .
-# docker run -p 8002:8002 nllb_service
